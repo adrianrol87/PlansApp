@@ -10,9 +10,22 @@
 		05936CAF2F29AC0A0058FFBF /* PlansApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PlansApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		05936D0B2F29BDD80058FFBF /* Exceptions for "PlansApp" folder in "PlansApp" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 05936CAE2F29AC0A0058FFBF /* PlansApp */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		05936CB12F29AC0A0058FFBF /* PlansApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				05936D0B2F29BDD80058FFBF /* Exceptions for "PlansApp" folder in "PlansApp" target */,
+			);
 			path = PlansApp;
 			sourceTree = "<group>";
 		};
@@ -256,7 +269,11 @@
 				DEVELOPMENT_TEAM = 97F73UC9UT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PlansApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Plans App";
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Se utiliza la cámara para tomar evidencia fotográfica de los dispositivos en sitio.\n";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -289,7 +306,11 @@
 				DEVELOPMENT_TEAM = 97F73UC9UT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = PlansApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Plans App";
+				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Se utiliza la cámara para tomar evidencia fotográfica de los dispositivos en sitio.\n";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
