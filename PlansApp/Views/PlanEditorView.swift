@@ -11,64 +11,104 @@ import UniformTypeIdentifiers
 struct PlanEditorView: View {
     @State private var project: PlanProject = ProjectStore.shared.load() ?? PlanProject()
     @State private var selectedType: DeviceType = .manualStation
-
     @State private var renderedImage: UIImage?
 
     @State private var isImporterPresented = false
     @State private var showPinsList = false
 
-    // Status
-    @State private var statusText: String?
-    @State private var statusTask: Task<Void, Never>?
+    @State private var toastText: String?
+    @State private var toastTask: Task<Void, Never>?
 
-    // Selección / edición
     @State private var selectedPinID: UUID?
     @State private var showEditPin = false
-
-    // Fuerza recreación del visor al cambiar PDF
     @State private var viewerID = UUID()
+
+    private var selectedPinNormalizedPoint: CGPoint? {
+        guard let id = selectedPinID,
+              let pin = project.pins.first(where: { $0.id == id }) else { return nil }
+        return CGPoint(x: pin.x, y: pin.y)
+    }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                headerBar
+            ZStack {
+                VStack(spacing: 0) {
+                    headerBar
 
-                if let img = renderedImage {
-                    ZoomablePDFImageView(
-                        image: img,
-                        pins: project.pins.filter { $0.pageIndex == project.pageIndex },
-                        selectedPinID: selectedPinID,
-                        onTapInImageSpace: { p in
-                            addPin(at: p, imageSize: img.size)
-                        },
-                        onSelectPin: { id in
-                            selectedPinID = id
-                            showEditPin = true
+                    if let img = renderedImage {
+                        ZoomablePDFImageView(
+                            image: img,
+                            pins: project.pins.filter { $0.pageIndex == project.pageIndex },
+                            selectedPinID: selectedPinID,
+                            selectedPinNormalizedPoint: selectedPinNormalizedPoint,
+                            onTapInImageSpace: { p in
+                                if selectedPinID != nil {
+                                    selectedPinID = nil
+                                    showToast("Selección cancelada (ya puedes mover/zoom)")
+                                    return
+                                }
+                                addPin(at: p, imageSize: img.size)
+                            },
+                            onSelectPin: { id in
+                                selectedPinID = id
+                                showToast("Pin seleccionado (pinch para tamaño, doble tap para editar)")
+                            },
+                            onEditPin: { id in
+                                selectedPinID = id
+                                showEditPin = true
+                            },
+                            onPinScaleCommit: { id, scale in
+                                updatePinScale(id: id, scale: scale)
+
+                                // ✅ Nuevo: este tamaño se vuelve el default para nuevos pins
+                                project.defaultPinScale = scale
+                                try? ProjectStore.shared.save(project)
+
+                                showToast("Tamaño predeterminado actualizado")
+                            }
+                        )
+                        .id(viewerID)
+                    } else {
+                        ContentUnavailableView(
+                            "Plans App",
+                            systemImage: "doc.richtext",
+                            description: Text("Importa un plano PDF para empezar.")
+                        )
+                    }
+                }
+
+                if let t = toastText {
+                    VStack {
+                        Spacer()
+                        HStack(spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(.white)
+                            Text(t)
+                                .foregroundStyle(.white)
+                                .font(.footnote)
+                                .lineLimit(2)
+                            Spacer()
                         }
-                    )
-                    .id(viewerID)
-                } else {
-                    ContentUnavailableView(
-                        "Plans App",
-                        systemImage: "doc.richtext",
-                        description: Text("Importa un plano PDF para empezar.")
-                    )
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(Color.black.opacity(0.85))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    .allowsHitTesting(false)
                 }
             }
             .navigationTitle("Plans App")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        isImporterPresented = true
-                    } label: {
+                    Button { isImporterPresented = true } label: {
                         Label("Importar", systemImage: "square.and.arrow.down")
                     }
                 }
-
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showPinsList.toggle()
-                    } label: {
+                    Button { showPinsList.toggle() } label: {
                         Label("Pins", systemImage: "list.bullet")
                     }
                     .disabled(renderedImage == nil)
@@ -84,21 +124,18 @@ struct PlanEditorView: View {
                     guard let url = urls.first else { return }
                     openPDF(url)
                 case .failure(let err):
-                    setStatus("Error importando: \(err.localizedDescription)")
+                    showToast("Error importando: \(err.localizedDescription)")
                 }
             }
             .sheet(isPresented: $showPinsList) {
                 NavigationStack {
-                    PinListView(
-                        pins: $project.pins,
-                        pageIndex: project.pageIndex
-                    )
-                    .navigationTitle("Dispositivos")
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Cerrar") { showPinsList = false }
+                    PinListView(pins: $project.pins, pageIndex: project.pageIndex)
+                        .navigationTitle("Dispositivos")
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Cerrar") { showPinsList = false }
+                            }
                         }
-                    }
                 }
             }
             .sheet(isPresented: $showEditPin) {
@@ -121,46 +158,31 @@ struct PlanEditorView: View {
         }
     }
 
-    // MARK: - Header
     private var headerBar: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
             HStack {
                 DevicePickerView(selected: $selectedType)
 
                 Spacer()
 
-                Button {
-                    saveProject()
-                } label: {
+                Button { saveProject() } label: {
                     Label("Guardar", systemImage: "square.and.arrow.down.on.square")
                 }
                 .disabled(renderedImage == nil)
             }
             .padding(.horizontal)
-            .padding(.top, 10)
-
-            if let t = statusText {
-                HStack {
-                    Image(systemName: "info.circle")
-                    Text(t)
-                        .font(.caption)
-                    Spacer()
-                }
-                .padding(.horizontal)
-                .padding(.bottom, 6)
-            }
+            .padding(.vertical, 10)
 
             Divider()
         }
         .background(.ultraThinMaterial)
     }
 
-    // MARK: - PDF
     private func openPDF(_ url: URL) {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
 
-        // Limpia fotos del proyecto actual
+        // Si estabas limpiando fotos al abrir otro PDF, aquí lo mantienes
         for pin in project.pins {
             PhotoStore.shared.deleteAll(for: pin)
         }
@@ -173,10 +195,9 @@ struct PlanEditorView: View {
         renderedImage = PDFRenderService.shared.renderPage(url: url, pageIndex: 0)
         viewerID = UUID()
 
-        setStatus("PDF cargado")
+        showToast("PDF cargado")
     }
 
-    // MARK: - Pins
     private func addPin(at p: CGPoint, imageSize: CGSize) {
         let x = min(max(p.x / imageSize.width, 0), 1)
         let y = min(max(p.y / imageSize.height, 0), 1)
@@ -185,13 +206,20 @@ struct PlanEditorView: View {
             pageIndex: project.pageIndex,
             x: x,
             y: y,
-            type: selectedType
+            type: selectedType,
+            pinScale: project.defaultPinScale   // ✅ Nuevo
         )
 
         project.pins.append(pin)
         selectedPinID = pin.id
 
-        setStatus("\(selectedType.title) agregado")
+        showToast("\(selectedType.title) agregado")
+    }
+
+    private func updatePinScale(id: UUID, scale: CGFloat) {
+        guard let idx = project.pins.firstIndex(where: { $0.id == id }) else { return }
+        project.pins[idx].pinScale = scale
+        try? ProjectStore.shared.save(project)
     }
 
     private func bindingForSelectedPin() -> Binding<Pin>? {
@@ -208,27 +236,26 @@ struct PlanEditorView: View {
         project.pins.removeAll { $0.id == id }
         selectedPinID = nil
 
-        setStatus("Pin eliminado")
+        showToast("Pin eliminado")
         saveProject()
     }
 
-    // MARK: - Save / Status
     private func saveProject() {
         do {
             try ProjectStore.shared.save(project)
-            setStatus("Guardado")
+            showToast("Guardado")
         } catch {
-            setStatus("Error al guardar")
+            showToast("Error al guardar")
         }
     }
 
-    private func setStatus(_ text: String) {
-        statusTask?.cancel()
-        statusText = text
-
-        statusTask = Task {
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            statusText = nil
+    private func showToast(_ text: String) {
+        toastTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.18)) { toastText = text }
+        toastTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            withAnimation(.easeInOut(duration: 0.18)) { toastText = nil }
         }
     }
 }
+
