@@ -10,11 +10,17 @@ import UniformTypeIdentifiers
 
 struct PlanEditorView: View {
     @State private var project: PlanProject = ProjectStore.shared.load() ?? PlanProject()
-    @State private var selectedType: DeviceType = .manualStation
+
+    // ✅ Cambia el default a uno que EXISTE en tus PDFs
+    @State private var selectedType: DeviceType = .alarm_estacion_manual
+
     @State private var renderedImage: UIImage?
 
     @State private var isImporterPresented = false
     @State private var showPinsList = false
+
+    // ✅ Catálogo visual (Opción B)
+    @State private var showCatalog = false
 
     @State private var toastText: String?
     @State private var toastTask: Task<Void, Never>?
@@ -60,7 +66,7 @@ struct PlanEditorView: View {
                             onPinScaleCommit: { id, scale in
                                 updatePinScale(id: id, scale: scale)
 
-                                // ✅ Nuevo: este tamaño se vuelve el default para nuevos pins
+                                // ✅ Este tamaño se vuelve el default para nuevos pins
                                 project.defaultPinScale = scale
                                 try? ProjectStore.shared.save(project)
 
@@ -155,13 +161,40 @@ struct PlanEditorView: View {
                     }
                 }
             }
+            // ✅ Sheet del catálogo visual
+            .sheet(isPresented: $showCatalog) {
+                DeviceCatalogView(selected: $selectedType)
+            }
         }
     }
 
     private var headerBar: some View {
         VStack(spacing: 0) {
-            HStack {
-                DevicePickerView(selected: $selectedType)
+            HStack(spacing: 12) {
+
+                // ✅ Botón que abre el catálogo visual (Opción B)
+                Button {
+                    showCatalog = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(selectedType.assetName)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 22, height: 22)
+
+                        Text(selectedType.title)
+                            .lineLimit(1)
+
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .opacity(0.8)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.thinMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .buttonStyle(.plain)
 
                 Spacer()
 
@@ -182,7 +215,6 @@ struct PlanEditorView: View {
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
 
-        // Si estabas limpiando fotos al abrir otro PDF, aquí lo mantienes
         for pin in project.pins {
             PhotoStore.shared.deleteAll(for: pin)
         }
@@ -207,7 +239,7 @@ struct PlanEditorView: View {
             x: x,
             y: y,
             type: selectedType,
-            pinScale: project.defaultPinScale   // ✅ Nuevo
+            pinScale: project.defaultPinScale
         )
 
         project.pins.append(pin)
@@ -258,4 +290,3 @@ struct PlanEditorView: View {
         }
     }
 }
-

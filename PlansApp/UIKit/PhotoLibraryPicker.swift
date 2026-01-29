@@ -14,7 +14,7 @@ struct PhotoLibraryPicker: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
-        picker.sourceType = .photoLibrary   // ✅ solo galería
+        picker.sourceType = .photoLibrary     // ✅ solo galería
         picker.allowsEditing = false
         picker.delegate = context.coordinator
         return picker
@@ -48,3 +48,4 @@ struct PhotoLibraryPicker: UIViewControllerRepresentable {
         }
     }
 }
+

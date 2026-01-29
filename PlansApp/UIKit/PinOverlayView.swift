@@ -15,10 +15,8 @@ final class PinOverlayView: UIView, UIGestureRecognizerDelegate {
 
     var selectedPinID: UUID?
 
-    // Para pinch global (sobre el overlay completo)
     private var overlayPinchGR: UIPinchGestureRecognizer?
     private var pinchStartScale: CGFloat = 1.0
-    private var isPinching: Bool = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -65,30 +63,28 @@ final class PinOverlayView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    // MARK: - Pinch global (cualquier parte del plano)
+    // MARK: - Pinch global sobre el overlay para escalar pin seleccionado
     @objc private func handleOverlayPinch(_ g: UIPinchGestureRecognizer) {
         guard let id = selectedPinID else { return }
         guard let pinView = findPinView(by: id) else { return }
-
-        // Debug (déjalo hasta que confirmes que ya entra)
-        print("OVERLAY PINCH → state:", g.state.rawValue, "scale:", g.scale)
 
         let minS: CGFloat = 0.7
         let maxS: CGFloat = 2.2
 
         switch g.state {
         case .began:
-            isPinching = true
             pinchStartScale = pinView.storedScaleForExternalAccess
+
         case .changed:
             let temp = clamp(pinchStartScale * g.scale, minS, maxS)
             pinView.applyScaleFromOutside(temp)
+
         case .ended, .cancelled, .failed:
             let final = clamp(pinchStartScale * g.scale, minS, maxS)
             pinView.applyScaleFromOutside(final)
             pinView.storedScaleForExternalAccess = final
             onPinScaleCommit?(id, final)
-            isPinching = false
+
         default:
             break
         }
@@ -96,9 +92,7 @@ final class PinOverlayView: UIView, UIGestureRecognizerDelegate {
 
     private func findPinView(by id: UUID) -> PinControl? {
         for v in subviews {
-            if let p = v as? PinControl, p.pinID == id {
-                return p
-            }
+            if let p = v as? PinControl, p.pinID == id { return p }
         }
         return nil
     }
@@ -107,9 +101,8 @@ final class PinOverlayView: UIView, UIGestureRecognizerDelegate {
         min(max(v, a), b)
     }
 
-    // MARK: - UIGestureRecognizerDelegate
+    // Solo permitir pinch si hay pin seleccionado
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        // Solo permitir pinch si hay pin seleccionado
         if gestureRecognizer === overlayPinchGR {
             return selectedPinID != nil
         }
@@ -117,17 +110,17 @@ final class PinOverlayView: UIView, UIGestureRecognizerDelegate {
     }
 }
 
-// MARK: - PinControl (tap/double tap + render)
+// MARK: - PinControl (icono PDF como asset)
 final class PinControl: UIView, UIGestureRecognizerDelegate {
 
     let pinID: UUID
-
     var onSelect: ((UUID) -> Void)?
     var onEdit: ((UUID) -> Void)?
 
     fileprivate var storedScaleForExternalAccess: CGFloat
 
-    private let baseSize: CGFloat = 34
+    private let baseSize: CGFloat = 44
+    private let imageView = UIImageView()
 
     init(pin: Pin, selected: Bool) {
         self.pinID = pin.id
@@ -135,26 +128,22 @@ final class PinControl: UIView, UIGestureRecognizerDelegate {
         super.init(frame: CGRect(x: 0, y: 0, width: baseSize, height: baseSize))
 
         isUserInteractionEnabled = true
+        backgroundColor = .clear
 
-        backgroundColor = UIColor.systemBlue.withAlphaComponent(0.92)
-        layer.cornerRadius = baseSize / 2
+        // icono PDF (assetName = rawValue del DeviceType)
+        imageView.contentMode = .scaleAspectFit
+        imageView.frame = bounds
+        imageView.image = UIImage(named: pin.type.rawValue)
+        addSubview(imageView)
 
-        layer.borderWidth = selected ? 3 : 1
-        layer.borderColor = selected ? UIColor.systemYellow.cgColor
-        : UIColor.white.withAlphaComponent(0.85).cgColor
-
+        // Highlight
+        layer.cornerRadius = 10
+        layer.borderWidth = selected ? 3 : 0
+        layer.borderColor = selected ? UIColor.systemYellow.cgColor : UIColor.clear.cgColor
         layer.shadowColor = selected ? UIColor.systemYellow.cgColor : UIColor.clear.cgColor
         layer.shadowRadius = selected ? 6 : 0
         layer.shadowOpacity = selected ? 0.9 : 0
         layer.shadowOffset = .zero
-
-        let label = UILabel(frame: bounds)
-        label.textAlignment = .center
-        label.font = .systemFont(ofSize: 12, weight: .bold)
-        label.textColor = .white
-        label.text = pin.type.shortCode
-        label.isUserInteractionEnabled = false
-        addSubview(label)
 
         applyScaleFromOutside(storedScaleForExternalAccess)
 
@@ -175,7 +164,6 @@ final class PinControl: UIView, UIGestureRecognizerDelegate {
     @objc private func handleSingleTap() { onSelect?(pinID) }
     @objc private func handleDoubleTap() { onEdit?(pinID) }
 
-    // Lo usa el overlay pinch
     fileprivate func applyScaleFromOutside(_ s: CGFloat) {
         transform = CGAffineTransform(scaleX: s, y: s)
     }
