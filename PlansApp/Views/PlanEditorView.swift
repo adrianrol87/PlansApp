@@ -65,15 +65,17 @@ struct PlanEditorView: View {
                             },
                             onPinScaleCommit: { id, scale in
                                 updatePinScale(id: id, scale: scale)
-
-                                // ✅ Este tamaño se vuelve el default para nuevos pins
                                 project.defaultPinScale = scale
                                 try? ProjectStore.shared.save(project)
-
                                 showToast("Tamaño predeterminado actualizado")
+                            },
+                            onMovePinCommit: { id, nx, ny in
+                                updatePinPosition(id: id, x: nx, y: ny)
+                                showToast("Pin movido")
                             }
                         )
                         .id(viewerID)
+
                     } else {
                         ContentUnavailableView(
                             "Plans App",
@@ -167,6 +169,14 @@ struct PlanEditorView: View {
             }
         }
     }
+    
+    private func updatePinPosition(id: UUID, x: CGFloat, y: CGFloat) {
+        guard let idx = project.pins.firstIndex(where: { $0.id == id }) else { return }
+        project.pins[idx].x = x
+        project.pins[idx].y = y
+        try? ProjectStore.shared.save(project)
+    }
+
 
     private var headerBar: some View {
         VStack(spacing: 0) {
