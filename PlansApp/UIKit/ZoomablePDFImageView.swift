@@ -25,12 +25,18 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIScrollView {
         let scroll = UIScrollView()
-        scroll.minimumZoomScale = 1
-        scroll.maximumZoomScale = 6
         scroll.delegate = context.coordinator
         scroll.bouncesZoom = true
         scroll.showsHorizontalScrollIndicator = false
         scroll.showsVerticalScrollIndicator = false
+        scroll.alwaysBounceVertical = false
+        scroll.alwaysBounceHorizontal = false
+
+        // valores iniciales (se ajustan cuando sepamos bounds)
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 6
+
+        context.coordinator.scrollView = scroll
 
         let imageView = UIImageView(image: image)
         imageView.contentMode = .scaleAspectFit
@@ -40,6 +46,7 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
         let overlay = PinOverlayView()
         overlay.backgroundColor = .clear
+        overlay.isUserInteractionEnabled = true
         imageView.addSubview(overlay)
         context.coordinator.overlay = overlay
 
@@ -48,9 +55,11 @@ struct ZoomablePDFImageView: UIViewRepresentable {
         overlay.onPinScaleCommit = { id, scale in onPinScaleCommit(id, scale) }
         overlay.onMovePinCommit = { id, nx, ny in onMovePinCommit(id, nx, ny) }
 
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        tap.cancelsTouchesInView = false
-        imageView.addGestureRecognizer(tap)
+        // ✅ Tap: capturado en overlay (espacio exacto de los pines)
+        let tapOnOverlay = UITapGestureRecognizer(target: context.coordinator,
+                                                  action: #selector(Coordinator.handleOverlayTap(_:)))
+        tapOnOverlay.cancelsTouchesInView = false
+        overlay.addGestureRecognizer(tapOnOverlay)
 
         return scroll
     }
@@ -59,25 +68,26 @@ struct ZoomablePDFImageView: UIViewRepresentable {
         guard let imageView = context.coordinator.imageView,
               let overlay = context.coordinator.overlay else { return }
 
-        let size = image.size
-        imageView.frame = CGRect(origin: .zero, size: size)
-        scroll.contentSize = size
+        // ✅ 1) Solo actualizar layout “duro” si cambió la imagen o cambió bounds
+        context.coordinator.ensureLayout(scroll: scroll, imageView: imageView, overlay: overlay, image: image)
 
-        overlay.frame = CGRect(origin: .zero, size: size)
-
-        // ✅ SOLO reconstruir pins si cambiaron
-        let snapshot = pins.map { PinSnapshot(id: $0.id, x: $0.x, y: $0.y, scale: $0.pinScale, type: $0.type.rawValue) }
+        // ✅ 2) Pins: solo reconstruir si cambiaron
+        let snapshot = pins.map {
+            PinSnapshot(id: $0.id, x: $0.x, y: $0.y, scale: $0.pinScale, type: $0.type.rawValue)
+        }
         if snapshot != context.coordinator.lastPinsSnapshot {
-            overlay.setPins(pins, imageSize: size)
+            overlay.setPins(pins, imageSize: image.size)
             context.coordinator.lastPinsSnapshot = snapshot
         }
 
-        // ✅ Selección se actualiza sin reconstruir pins
+        // ✅ 3) Selección sin tocar zoom/layout
         overlay.selectedPinID = selectedPinID
 
-        if let p = selectedPinNormalizedPoint {
-            context.coordinator.centerOnNormalizedPoint(p, in: scroll)
-        }
+        // ✅ 4) Auto-centrado solo si pin fuera de vista (y sin tocar minZoom)
+        context.coordinator.maybeCenterOnSelectedPin(
+            selectedID: selectedPinID,
+            normalizedPoint: selectedPinNormalizedPoint
+        )
     }
 
     // MARK: - Snapshot
@@ -91,33 +101,168 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIScrollViewDelegate {
         var parent: ZoomablePDFImageView
+
+        weak var scrollView: UIScrollView?
         weak var imageView: UIImageView?
         weak var overlay: PinOverlayView?
 
         var lastPinsSnapshot: [PinSnapshot] = []
 
-        init(_ parent: ZoomablePDFImageView) {
-            self.parent = parent
-        }
+        // ✅ Estado estable
+        private var lastImageRef: UIImage?
+        private var lastImageSize: CGSize = .zero
+        private var lastScrollBounds: CGSize = .zero
+
+        // min zoom “base” fijo por imagen
+        private var baseMinZoom: CGFloat?
+        private var didApplyInitialFit = false
+
+        // para no centrar repetidamente
+        private var lastAutoCenteredPinID: UUID?
+
+        init(_ parent: ZoomablePDFImageView) { self.parent = parent }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
 
-        @objc func handleTap(_ g: UITapGestureRecognizer) {
-            guard let imageView else { return }
-            let p = g.location(in: imageView)
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            centerContentIfNeeded(scrollView)
+        }
+
+        // ✅ Tap (overlay)
+        @objc func handleOverlayTap(_ g: UITapGestureRecognizer) {
+            guard let overlay else { return }
+            let p = g.location(in: overlay)
             parent.onTapInImageSpace(p)
         }
 
-        func centerOnNormalizedPoint(_ p: CGPoint, in scroll: UIScrollView) {
-            guard let imageView else { return }
+        // ✅ Layout/fit estable: solo cuando cambia imagen o bounds
+        func ensureLayout(scroll: UIScrollView, imageView: UIImageView, overlay: PinOverlayView, image: UIImage) {
+            let boundsSize = scroll.bounds.size
+            let imageSize = image.size
 
-            let target = CGPoint(x: p.x * imageView.bounds.width, y: p.y * imageView.bounds.height)
+            let imageChanged = (lastImageRef !== image) || (lastImageSize != imageSize)
+            let boundsChanged = (lastScrollBounds != boundsSize)
+
+            // 1) Si cambió imagen: reset de estado y aplicar fit
+            if imageChanged {
+                lastImageRef = image
+                lastImageSize = imageSize
+                lastAutoCenteredPinID = nil
+                didApplyInitialFit = false
+                baseMinZoom = nil
+
+                imageView.image = image
+
+                // Layout base del contenido (solo cuando cambia imagen)
+                imageView.frame = CGRect(origin: .zero, size: imageSize)
+                overlay.frame = CGRect(origin: .zero, size: imageSize)
+                scroll.contentSize = imageSize
+            }
+
+            // 2) Si cambió bounds (rotación/split), solo recalcular el “fitNow”
+            if imageChanged || boundsChanged {
+                lastScrollBounds = boundsSize
+
+                // si bounds aún no están listos, salir
+                guard boundsSize.width > 10, boundsSize.height > 10,
+                      imageSize.width > 10, imageSize.height > 10 else { return }
+
+                let fitNow = min(boundsSize.width / imageSize.width, boundsSize.height / imageSize.height)
+
+                // baseMinZoom solo se fija o baja (nunca sube)
+                if baseMinZoom == nil { baseMinZoom = fitNow }
+                else { baseMinZoom = min(baseMinZoom!, fitNow) }
+
+                let minZoom = baseMinZoom ?? fitNow
+                scroll.minimumZoomScale = minZoom
+                scroll.maximumZoomScale = max(6, minZoom * 12)
+
+                // aplicar zoom inicial SOLO cuando cambió imagen (o primera vez con bounds validos)
+                if !didApplyInitialFit {
+                    didApplyInitialFit = true
+                    DispatchQueue.main.async {
+                        scroll.setZoomScale(minZoom, animated: false)
+                        self.centerContentIfNeeded(scroll)
+                    }
+                } else {
+                    // nunca empujamos zoom hacia arriba por updates; solo corregimos si quedó por debajo del mínimo
+                    if scroll.zoomScale < minZoom {
+                        scroll.setZoomScale(minZoom, animated: false)
+                    }
+                    // y centramos si es necesario (no cambia offsets agresivamente)
+                    centerContentIfNeeded(scroll)
+                }
+            } else {
+                // NO tocar layout/zoom si solo cambió pins/selección
+            }
+        }
+
+        // ✅ Centrar contenido sin alterar zoomScale
+        func centerContentIfNeeded(_ scrollView: UIScrollView) {
+            guard let imageView = imageView else { return }
+
+            let boundsSize = scrollView.bounds.size
+            let scaled = CGSize(width: imageView.bounds.width * scrollView.zoomScale,
+                                height: imageView.bounds.height * scrollView.zoomScale)
+
+            let horizontalInset = max(0, (boundsSize.width - scaled.width) / 2)
+            let verticalInset = max(0, (boundsSize.height - scaled.height) / 2)
+
+            // Ojo: esto no debe causar “brincos” si no cambias zoom
+            scrollView.contentInset = UIEdgeInsets(top: verticalInset,
+                                                  left: horizontalInset,
+                                                  bottom: verticalInset,
+                                                  right: horizontalInset)
+        }
+
+        // ✅ Auto-centrado solo si está fuera de vista
+        func maybeCenterOnSelectedPin(selectedID: UUID?, normalizedPoint: CGPoint?) {
+            guard let scroll = scrollView else { return }
+            guard let id = selectedID, let p = normalizedPoint else { return }
+            guard id != lastAutoCenteredPinID else { return }
+
+            let imageSize = lastImageSize
+            guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+            let target = CGPoint(x: p.x * imageSize.width, y: p.y * imageSize.height)
+
+            if isPointVisible(target, in: scroll) {
+                lastAutoCenteredPinID = id
+                return
+            }
+
+            centerOnPoint(target, in: scroll)
+            lastAutoCenteredPinID = id
+        }
+
+        private func isPointVisible(_ p: CGPoint, in scroll: UIScrollView) -> Bool {
+            let inset = scroll.contentInset
+            let visibleOrigin = CGPoint(x: scroll.contentOffset.x + inset.left,
+                                        y: scroll.contentOffset.y + inset.top)
+            let visibleSize = CGSize(width: scroll.bounds.width - inset.left - inset.right,
+                                     height: scroll.bounds.height - inset.top - inset.bottom)
 
             let zoom = scroll.zoomScale
+            let rectInImage = CGRect(
+                x: visibleOrigin.x / zoom,
+                y: visibleOrigin.y / zoom,
+                width: visibleSize.width / zoom,
+                height: visibleSize.height / zoom
+            ).insetBy(dx: -40, dy: -40)
+
+            return rectInImage.contains(p)
+        }
+
+        private func centerOnPoint(_ pointInImage: CGPoint, in scroll: UIScrollView) {
+            let zoom = scroll.zoomScale
+            let inset = scroll.contentInset
             let viewSize = scroll.bounds.size
 
-            let x = max(0, target.x * zoom - viewSize.width / 2)
-            let y = max(0, target.y * zoom - viewSize.height / 2)
+            let targetX = pointInImage.x * zoom
+            let targetY = pointInImage.y * zoom
+
+            let x = max(-inset.left, targetX - (viewSize.width / 2))
+            let y = max(-inset.top, targetY - (viewSize.height / 2))
 
             scroll.setContentOffset(CGPoint(x: x, y: y), animated: true)
         }

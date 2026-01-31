@@ -109,6 +109,7 @@ struct PlanEditorView: View {
                 }
             }
             .navigationTitle("Plans App")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { isImporterPresented = true } label: {
