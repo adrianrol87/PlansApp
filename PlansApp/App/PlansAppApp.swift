@@ -11,8 +11,7 @@ import SwiftUI
 struct PlansAppApp: App {
     var body: some Scene {
         WindowGroup {
-            PlanEditorView()
+            ProjectsHomeView()
         }
     }
 }
-
