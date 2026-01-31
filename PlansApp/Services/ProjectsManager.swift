@@ -50,7 +50,7 @@ final class ProjectsManager: ObservableObject {
         let data = try Data(contentsOf: url)
 
         let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601   // ✅ CLAVE
+        dec.dateDecodingStrategy = .iso8601
         return try dec.decode(AppProject.self, from: data)
     }
 
@@ -62,7 +62,7 @@ final class ProjectsManager: ObservableObject {
 
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        enc.dateEncodingStrategy = .iso8601   // ✅ guardamos ISO8601
+        enc.dateEncodingStrategy = .iso8601
 
         let data = try enc.encode(p)
         try data.write(to: url, options: [.atomic])
@@ -107,6 +107,50 @@ final class ProjectsManager: ObservableObject {
         AppFileSystem.projectPDFsURL(projectID).appendingPathComponent(pdfFilename)
     }
 
+    // MARK: - ✅ NEW: Delete Sheet (PDF + EditorState + Photos)
+
+    /// Borra un plano completo:
+    /// - PDF en /PDFs
+    /// - estado del editor /EditorState/sheet_<id>.json
+    /// - fotos asociadas (según pins guardados en ese estado)
+    /// - remueve el sheet del project.json
+    func deleteSheet(projectID: UUID, sheet: AppSheet) throws {
+        try AppFileSystem.ensureProjectFolders(projectID)
+
+        var project = try load(projectID: projectID)
+
+        let fm = FileManager.default
+
+        // 1) Cargar estado del editor para poder borrar fotos
+        let stateURL = AppFileSystem.sheetEditorJSONURL(projectID: projectID, sheetID: sheet.id)
+        if fm.fileExists(atPath: stateURL.path),
+           let stateData = try? Data(contentsOf: stateURL),
+           let state = try? JSONDecoder().decode(PlanProject.self, from: stateData) {
+
+            // borrar fotos referenciadas por pins
+            for pin in state.pins {
+                PhotoStore.shared.deleteAll(for: pin)
+            }
+        }
+
+        // 2) Borrar estado del editor
+        if fm.fileExists(atPath: stateURL.path) {
+            try fm.removeItem(at: stateURL)
+        }
+
+        // 3) Borrar PDF
+        let pdf = pdfURL(projectID: projectID, pdfFilename: sheet.pdfFilename)
+        if fm.fileExists(atPath: pdf.path) {
+            try fm.removeItem(at: pdf)
+        }
+
+        // 4) Remover sheet del proyecto y guardar
+        project.sheets.removeAll { $0.id == sheet.id }
+        try save(project)
+
+        refresh()
+    }
+
     // MARK: - Private
 
     private func loadAll() throws -> [AppProject] {
@@ -120,7 +164,7 @@ final class ProjectsManager: ObservableObject {
         )
 
         let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601   // ✅ CLAVE
+        dec.dateDecodingStrategy = .iso8601
 
         var out: [AppProject] = []
         for dir in dirs {
@@ -147,3 +191,4 @@ final class ProjectsManager: ObservableObject {
         return str.isEmpty ? "Plano" : str
     }
 }
+
