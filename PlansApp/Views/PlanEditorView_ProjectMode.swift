@@ -26,8 +26,14 @@ struct PlanEditorView_ProjectMode: View {
     @State private var selectedPinID: UUID?
     @State private var viewerID = UUID()
 
-    // ✅ Catálogo visual (igual que tu editor original)
     @State private var showCatalog = false
+
+    // ✅ Nuevo: modo de herramienta
+    enum ToolMode: String, CaseIterable {
+        case pins = "Pins"
+        case draw = "Dibujo"
+    }
+    @State private var toolMode: ToolMode = .pins
 
     private var selectedPinNormalizedPoint: CGPoint? {
         guard let id = selectedPinID,
@@ -47,6 +53,9 @@ struct PlanEditorView_ProjectMode: View {
                         selectedPinID: selectedPinID,
                         selectedPinNormalizedPoint: selectedPinNormalizedPoint,
                         onTapInImageSpace: { p in
+                            // ✅ En modo dibujo no agrega pins
+                            guard toolMode == .pins else { return }
+
                             if selectedPinID != nil {
                                 selectedPinID = nil
                                 showToast("Selección cancelada")
@@ -55,10 +64,12 @@ struct PlanEditorView_ProjectMode: View {
                             addPin(at: p, imageSize: img.size)
                         },
                         onSelectPin: { id in
+                            guard toolMode == .pins else { return }
                             selectedPinID = id
                             showToast("Pin seleccionado")
                         },
                         onEditPin: { id in
+                            guard toolMode == .pins else { return }
                             selectedPinID = id
                             showEditPin = true
                         },
@@ -72,9 +83,15 @@ struct PlanEditorView_ProjectMode: View {
                             updatePinPosition(id: id, x: nx, y: ny)
                             saveState()
                             showToast("Pin movido")
-                        }
+                        },
+                        isDrawingMode: toolMode == .draw,
+                        drawingData: $project.drawingData
                     )
                     .id(viewerID)
+                    .onChange(of: project.drawingData) { _, _ in
+                        // ✅ cada vez que cambie el dibujo, persistimos
+                        saveState()
+                    }
                 } else {
                     ProgressView("Cargando plano…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -140,7 +157,6 @@ struct PlanEditorView_ProjectMode: View {
                 }
             }
         }
-        // ✅ Sheet del catálogo visual (igual que tu editor original)
         .sheet(isPresented: $showCatalog) {
             DeviceCatalogView(selected: $selectedType)
         }
@@ -155,31 +171,48 @@ struct PlanEditorView_ProjectMode: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
 
-                // ✅ Botón que abre el catálogo visual (Opción B) — igual que PlanEditorView
-                Button {
-                    showCatalog = true
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(selectedType.assetName)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 22, height: 22)
-
-                        Text(selectedType.title)
-                            .lineLimit(1)
-
-                        Image(systemName: "chevron.down")
-                            .font(.caption)
-                            .opacity(0.8)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                // ✅ Tool selector (Pins / Dibujo)
+                Picker("", selection: $toolMode) {
+                    Text("Pins").tag(ToolMode.pins)
+                    Text("Dibujo").tag(ToolMode.draw)
                 }
-                .buttonStyle(.plain)
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+                .onChange(of: toolMode) { _, newValue in
+                    // Al cambiar a dibujo: deseleccionar pin para evitar conflictos visuales
+                    if newValue == .draw {
+                        selectedPinID = nil
+                        showToast("Modo dibujo: 1 dedo dibuja, 2 dedos mueve")
+                    } else {
+                        showToast("Modo pins")
+                    }
+                }
 
                 Spacer()
+
+                // Selector de dispositivo solo cuando estás en Pins
+                if toolMode == .pins {
+                    Button { showCatalog = true } label: {
+                        HStack(spacing: 10) {
+                            Image(selectedType.assetName)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 22, height: 22)
+
+                            Text(selectedType.title)
+                                .lineLimit(1)
+
+                            Image(systemName: "chevron.down")
+                                .font(.caption)
+                                .opacity(0.8)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.thinMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 Button {
                     saveState()
@@ -197,7 +230,7 @@ struct PlanEditorView_ProjectMode: View {
         .background(.ultraThinMaterial)
     }
 
-    // MARK: - Actions
+    // MARK: - Pins
 
     private func addPin(at p: CGPoint, imageSize: CGSize) {
         let x = min(max(p.x / imageSize.width, 0), 1)
@@ -245,6 +278,8 @@ struct PlanEditorView_ProjectMode: View {
         showToast("Pin eliminado")
     }
 
+    // MARK: - Save / Toast
+
     private func saveState() {
         do { try store.save(project) }
         catch { showToast("Error guardando") }
@@ -259,3 +294,4 @@ struct PlanEditorView_ProjectMode: View {
         }
     }
 }
+

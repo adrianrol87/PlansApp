@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UIKit
+import PencilKit
 
 struct ZoomablePDFImageView: UIViewRepresentable {
     let image: UIImage
@@ -20,6 +21,10 @@ struct ZoomablePDFImageView: UIViewRepresentable {
     let onEditPin: (UUID) -> Void
     let onPinScaleCommit: (UUID, CGFloat) -> Void
     let onMovePinCommit: (UUID, CGFloat, CGFloat) -> Void
+
+    // PencilKit
+    let isDrawingMode: Bool
+    @Binding var drawingData: Data?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -36,12 +41,14 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
         context.coordinator.scrollView = scroll
 
+        // Image view
         let imageView = UIImageView(image: image)
         imageView.contentMode = .scaleAspectFit
         imageView.isUserInteractionEnabled = true
         scroll.addSubview(imageView)
         context.coordinator.imageView = imageView
 
+        // Pins overlay
         let overlay = PinOverlayView()
         overlay.backgroundColor = .clear
         overlay.isUserInteractionEnabled = true
@@ -53,7 +60,23 @@ struct ZoomablePDFImageView: UIViewRepresentable {
         overlay.onPinScaleCommit = { id, scale in onPinScaleCommit(id, scale) }
         overlay.onMovePinCommit = { id, nx, ny in onMovePinCommit(id, nx, ny) }
 
-        // Tap en overlay (coordenadas exactas del espacio de imagen)
+        // PencilKit canvas overlay
+        let canvas = PKCanvasView()
+        canvas.backgroundColor = .clear
+        canvas.isOpaque = false
+        canvas.drawingPolicy = .anyInput
+        canvas.delegate = context.coordinator
+
+        // ✅ Tool por defecto SIEMPRE negro (para que no pase blanco)
+        canvas.tool = PKInkingTool(.pen, color: .black, width: 6)
+
+        imageView.addSubview(canvas)
+        context.coordinator.canvas = canvas
+
+        // ✅ ToolPicker setup con reintentos
+        context.coordinator.attachToolPickerWhenPossible()
+
+        // Tap para agregar pins (solo si NO es modo dibujo)
         let tap = UITapGestureRecognizer(target: context.coordinator,
                                          action: #selector(Coordinator.handleOverlayTap(_:)))
         tap.cancelsTouchesInView = false
@@ -64,11 +87,20 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
     func updateUIView(_ scroll: UIScrollView, context: Context) {
         guard let imageView = context.coordinator.imageView,
-              let overlay = context.coordinator.overlay else { return }
+              let overlay = context.coordinator.overlay,
+              let canvas = context.coordinator.canvas else { return }
 
-        context.coordinator.ensureLayout(scroll: scroll, imageView: imageView, overlay: overlay, image: image)
+        context.coordinator.parent = self
 
-        // pins: solo reconstruir si cambiaron
+        context.coordinator.ensureLayout(
+            scroll: scroll,
+            imageView: imageView,
+            overlay: overlay,
+            canvas: canvas,
+            image: image
+        )
+
+        // Pins
         let snapshot = pins.map {
             PinSnapshot(id: $0.id, x: $0.x, y: $0.y, scale: $0.pinScale, type: $0.type.rawValue)
         }
@@ -79,6 +111,13 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
         overlay.selectedPinID = selectedPinID
 
+        // PencilKit: cargar data si cambió
+        context.coordinator.applyDrawingDataIfNeeded(drawingData)
+
+        // ✅ Modo dibujo/pins: aquí se fuerza tool negro y se muestra toolpicker
+        context.coordinator.setMode(isDrawing: isDrawingMode)
+
+        // Center pin si aplica
         context.coordinator.maybeCenterOnSelectedPin(
             selectedID: selectedPinID,
             normalizedPoint: selectedPinNormalizedPoint
@@ -93,12 +132,17 @@ struct ZoomablePDFImageView: UIViewRepresentable {
         let type: String
     }
 
-    final class Coordinator: NSObject, UIScrollViewDelegate {
+    final class Coordinator: NSObject, UIScrollViewDelegate, PKCanvasViewDelegate {
         var parent: ZoomablePDFImageView
+
+        private var toolPicker: PKToolPicker?
+        private var toolPickerAttached = false
+        private var toolPickerAttachAttempts = 0
 
         weak var scrollView: UIScrollView?
         weak var imageView: UIImageView?
         weak var overlay: PinOverlayView?
+        weak var canvas: PKCanvasView?
 
         var lastPinsSnapshot: [PinSnapshot] = []
 
@@ -108,13 +152,55 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
         private var baseMinZoom: CGFloat?
         private var didApplyInitialFit = false
-
         private var lastAutoCenteredPinID: UUID?
 
-        // ✅ NUEVO: evita loops; reintenta fit cuando bounds aún no están listos
         private var pendingFitRetry = false
 
-        init(_ parent: ZoomablePDFImageView) { self.parent = parent }
+        private var lastAppliedDrawingHash: Int?
+        private var lastIsDrawingMode: Bool?
+
+        init(_ parent: ZoomablePDFImageView) {
+            self.parent = parent
+        }
+
+        // MARK: - ToolPicker (SwiftUI-safe attach with retries)
+
+        func attachToolPickerWhenPossible() {
+            // evita loops infinitos
+            guard toolPickerAttached == false else { return }
+            guard toolPickerAttachAttempts < 30 else { return } // ~30 intentos
+
+            toolPickerAttachAttempts += 1
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+                guard let self else { return }
+                guard let canvas = self.canvas else { return }
+
+                // 1) Preferimos la window REAL del canvas
+                if let window = canvas.window {
+                    self.attachToolPicker(window: window, canvas: canvas)
+                    return
+                }
+
+                // 2) Si aún no hay window, reintenta
+                self.attachToolPickerWhenPossible()
+            }
+        }
+
+        private func attachToolPicker(window: UIWindow, canvas: PKCanvasView) {
+            guard #available(iOS 14.0, *) else { return }
+            guard toolPickerAttached == false else { return }
+
+            let picker = PKToolPicker.shared(for: window)
+            toolPicker = picker
+
+            picker?.addObserver(canvas)
+            picker?.setVisible(false, forFirstResponder: canvas)
+
+            toolPickerAttached = true
+        }
+
+        // MARK: UIScrollViewDelegate
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
 
@@ -123,12 +209,15 @@ struct ZoomablePDFImageView: UIViewRepresentable {
         }
 
         @objc func handleOverlayTap(_ g: UITapGestureRecognizer) {
+            guard parent.isDrawingMode == false else { return }
             guard let overlay else { return }
             let p = g.location(in: overlay)
             parent.onTapInImageSpace(p)
         }
 
-        func ensureLayout(scroll: UIScrollView, imageView: UIImageView, overlay: PinOverlayView, image: UIImage) {
+        // MARK: Layout
+
+        func ensureLayout(scroll: UIScrollView, imageView: UIImageView, overlay: PinOverlayView, canvas: PKCanvasView, image: UIImage) {
             let boundsSize = scroll.bounds.size
             let imageSize = image.size
 
@@ -145,14 +234,16 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
                 imageView.image = image
                 imageView.frame = CGRect(origin: .zero, size: imageSize)
+
                 overlay.frame = CGRect(origin: .zero, size: imageSize)
+                canvas.frame = CGRect(origin: .zero, size: imageSize)
+
                 scroll.contentSize = imageSize
             }
 
             if imageChanged || boundsChanged {
                 lastScrollBounds = boundsSize
 
-                // ❗ Si bounds todavía no están “bien”, reintenta en el siguiente ciclo
                 if boundsSize.width < 20 || boundsSize.height < 20 {
                     scheduleFitRetry(scroll: scroll, imageSize: imageSize)
                     return
@@ -174,7 +265,6 @@ struct ZoomablePDFImageView: UIViewRepresentable {
                 if bounds.width >= 20, bounds.height >= 20 {
                     self.applyStableFit(scroll: scroll, boundsSize: bounds, imageSize: imageSize)
                 } else {
-                    // si todavía no, reintenta una vez más
                     self.scheduleFitRetry(scroll: scroll, imageSize: imageSize)
                 }
             }
@@ -186,7 +276,7 @@ struct ZoomablePDFImageView: UIViewRepresentable {
             let fitNow = min(boundsSize.width / imageSize.width, boundsSize.height / imageSize.height)
 
             if baseMinZoom == nil { baseMinZoom = fitNow }
-            else { baseMinZoom = min(baseMinZoom!, fitNow) } // nunca subir
+            else { baseMinZoom = min(baseMinZoom!, fitNow) }
 
             let minZoom = baseMinZoom ?? fitNow
             scroll.minimumZoomScale = minZoom
@@ -272,8 +362,73 @@ struct ZoomablePDFImageView: UIViewRepresentable {
 
             scroll.setContentOffset(CGPoint(x: x, y: y), animated: true)
         }
+
+        // MARK: PencilKit Mode
+
+        func setMode(isDrawing: Bool) {
+            guard let scroll = scrollView,
+                  let overlay = overlay,
+                  let canvas = canvas else { return }
+
+            // asegurar toolpicker attach
+            if toolPickerAttached == false {
+                attachToolPickerWhenPossible()
+            }
+
+            // Evitar repetición
+            if lastIsDrawingMode == isDrawing { return }
+            lastIsDrawingMode = isDrawing
+
+            overlay.isUserInteractionEnabled = !isDrawing
+            canvas.isUserInteractionEnabled = isDrawing
+
+            if isDrawing {
+                // 2 dedos pan, 1 dedo dibuja
+                scroll.panGestureRecognizer.minimumNumberOfTouches = 2
+
+                // ✅ Forzar SIEMPRE un tool negro visible
+                canvas.tool = PKInkingTool(.pen, color: .black, width: 6)
+
+                // ✅ Mostrar ToolPicker
+                DispatchQueue.main.async { [weak self, weak canvas] in
+                    guard let self, let canvas else { return }
+                    self.toolPicker?.setVisible(true, forFirstResponder: canvas)
+                    canvas.becomeFirstResponder()
+                }
+            } else {
+                scroll.panGestureRecognizer.minimumNumberOfTouches = 1
+
+                // Ocultar ToolPicker
+                DispatchQueue.main.async { [weak self, weak canvas] in
+                    guard let self, let canvas else { return }
+                    self.toolPicker?.setVisible(false, forFirstResponder: canvas)
+                    canvas.resignFirstResponder()
+                }
+            }
+        }
+
+        func applyDrawingDataIfNeeded(_ data: Data?) {
+            guard let canvas = canvas else { return }
+
+            let hash = data?.hashValue ?? 0
+            guard hash != lastAppliedDrawingHash else { return }
+            lastAppliedDrawingHash = hash
+
+            if let data, let drawing = try? PKDrawing(data: data) {
+                canvas.drawing = drawing
+            } else {
+                canvas.drawing = PKDrawing()
+            }
+        }
+
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            let data = canvasView.drawing.dataRepresentation()
+
+            // ✅ Evitar warning morado en SwiftUI
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.parent.drawingData = data
+            }
+        }
     }
 }
-
-
-

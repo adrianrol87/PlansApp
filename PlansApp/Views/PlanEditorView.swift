@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 struct PlanEditorView: View {
     @State private var project: PlanProject = ProjectStore.shared.load() ?? PlanProject()
 
-    // ✅ Cambia el default a uno que EXISTE en tus PDFs
+    // ✅ Usa el mismo default que tu catálogo actual
     @State private var selectedType: DeviceType = .alarm_estacion_manual
 
     @State private var renderedImage: UIImage?
@@ -19,15 +19,15 @@ struct PlanEditorView: View {
     @State private var isImporterPresented = false
     @State private var showPinsList = false
 
-    // ✅ Catálogo visual (Opción B)
-    @State private var showCatalog = false
-
     @State private var toastText: String?
     @State private var toastTask: Task<Void, Never>?
 
     @State private var selectedPinID: UUID?
     @State private var showEditPin = false
     @State private var viewerID = UUID()
+
+    // ✅ Catálogo visual como en Project Mode
+    @State private var showCatalog = false
 
     private var selectedPinNormalizedPoint: CGPoint? {
         guard let id = selectedPinID,
@@ -50,14 +50,14 @@ struct PlanEditorView: View {
                             onTapInImageSpace: { p in
                                 if selectedPinID != nil {
                                     selectedPinID = nil
-                                    showToast("Selección cancelada (ya puedes mover/zoom)")
+                                    showToast("Selección cancelada")
                                     return
                                 }
                                 addPin(at: p, imageSize: img.size)
                             },
                             onSelectPin: { id in
                                 selectedPinID = id
-                                showToast("Pin seleccionado (pinch para tamaño, doble tap para editar)")
+                                showToast("Pin seleccionado")
                             },
                             onEditPin: { id in
                                 selectedPinID = id
@@ -71,11 +71,14 @@ struct PlanEditorView: View {
                             },
                             onMovePinCommit: { id, nx, ny in
                                 updatePinPosition(id: id, x: nx, y: ny)
+                                try? ProjectStore.shared.save(project)
                                 showToast("Pin movido")
-                            }
+                            },
+                            // ✅ para que compile con PencilKit en el wrapper
+                            isDrawingMode: false,
+                            drawingData: .constant(nil)
                         )
                         .id(viewerID)
-
                     } else {
                         ContentUnavailableView(
                             "Plans App",
@@ -109,7 +112,6 @@ struct PlanEditorView: View {
                 }
             }
             .navigationTitle("Plans App")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { isImporterPresented = true } label: {
@@ -164,26 +166,16 @@ struct PlanEditorView: View {
                     }
                 }
             }
-            // ✅ Sheet del catálogo visual
+            // ✅ catálogo visual
             .sheet(isPresented: $showCatalog) {
                 DeviceCatalogView(selected: $selectedType)
             }
         }
     }
-    
-    private func updatePinPosition(id: UUID, x: CGFloat, y: CGFloat) {
-        guard let idx = project.pins.firstIndex(where: { $0.id == id }) else { return }
-        project.pins[idx].x = x
-        project.pins[idx].y = y
-        try? ProjectStore.shared.save(project)
-    }
-
 
     private var headerBar: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-
-                // ✅ Botón que abre el catálogo visual (Opción B)
                 Button {
                     showCatalog = true
                 } label: {
@@ -265,6 +257,12 @@ struct PlanEditorView: View {
         try? ProjectStore.shared.save(project)
     }
 
+    private func updatePinPosition(id: UUID, x: CGFloat, y: CGFloat) {
+        guard let idx = project.pins.firstIndex(where: { $0.id == id }) else { return }
+        project.pins[idx].x = x
+        project.pins[idx].y = y
+    }
+
     private func bindingForSelectedPin() -> Binding<Pin>? {
         guard let id = selectedPinID,
               let idx = project.pins.firstIndex(where: { $0.id == id }) else { return nil }
@@ -301,3 +299,4 @@ struct PlanEditorView: View {
         }
     }
 }
+

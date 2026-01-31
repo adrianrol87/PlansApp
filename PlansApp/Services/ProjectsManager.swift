@@ -28,7 +28,7 @@ final class ProjectsManager: ObservableObject {
     }
 
     func createProject(name: String) throws -> AppProject {
-        var p = AppProject(name: name)
+        let p = AppProject(name: name)
         try AppFileSystem.ensureProjectFolders(p.id)
         try save(p)
         refresh()
